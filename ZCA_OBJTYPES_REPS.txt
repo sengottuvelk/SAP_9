@@ -1,0 +1,30 @@
+*&---------------------------------------------------------------------*
+*& Report  ZCA_OBJTYPES
+*&
+*&---------------------------------------------------------------------*
+*&
+*&
+*&---------------------------------------------------------------------*
+
+REPORT  ZCA_OBJTYPES.
+
+data:
+  it_out                    type standard table of KO100.
+
+FIELD-SYMBOLS:
+  <p>                       type KO100.
+
+CALL FUNCTION 'TRINT_OBJECT_TABLE'
+  EXPORTING
+    IV_COMPLETE             = 'X'
+* IMPORTING
+*   EV_LINES_FOUND          =
+*   EV_LINES_NOTFOUND       =
+  TABLES
+*   TT_TYPES_IN             =
+    tt_types_out            = it_out.
+          .
+
+loop at it_out ASSIGNING <p>.
+  write:/ <p>-pgmid, <p>-object, <p>-text.
+endloop.
