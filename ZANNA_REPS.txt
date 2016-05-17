@@ -1,0 +1,18 @@
+*&---------------------------------------------------------------------*
+*& Report  ZANNA
+*&
+*&---------------------------------------------------------------------*
+*&
+*&
+*&---------------------------------------------------------------------*
+
+REPORT zanna.
+data: lt_ZAQCUSTOMING_LOG type TABLE OF ZAQCUSTOMING_LOG.
+data: ls_ZAQCUSTOMING_LOG type ZAQCUSTOMING_LOG.
+select * from ZAQCUSTOMING_LOG into TABLE lT_ZAQCUSTOMING_LOG.
+loop at lt_ZAQCUSTOMING_LOG into ls_ZAQCUSTOMING_LOG.
+  ls_ZAQCUSTOMING_LOG-viewname = 'V_TVAK'.
+  UPDATE ZAQCUSTOMING_LOG FROM ls_ZAQCUSTOMING_LOG.hfddjhfdhgfdfdjfdgfdgfdgfdhgfdgfdgfdg
+endloop.
+
+COMMIT WORK.
