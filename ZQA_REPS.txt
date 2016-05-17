@@ -1,0 +1,31 @@
+*&----------------------------------------------------------------------*
+*& Report  ZQA
+*&
+*&---------------------------------------------------------------------*
+*&
+*&
+*&---------------------------------------------------------------------*
+
+REPORT  ZQA.
+*test
+*test1
+*test2
+*test for a change CHANGE LINE
+***************************ADDD LINE
+tables: vrsx2.
+DATA: V_C TYPE X. "STXLDUMMY2. "STXL-CLUSTD.
+data: v_st type standard table of vrsx2 with header line.
+*DATA: CLUSTD TYPE STXLDUMMY2.
+PARAMETERS: p_test(1).
+
+SELECT * FROM vrsx2 INTO table V_st up to 10 rows
+WHERE OBJSUBTYPE = 'REPS'
+ AND  OBJNAME = 'ZQA'.
+*AND TDID = 'S001'.
+*charlie is a knob
+
+
+IF SY-SUBRC = 0.
+read table v_st index 1.  " just to make sure to read not zero entries from debuging
+write:/ v_st-clustd.
+endif.
