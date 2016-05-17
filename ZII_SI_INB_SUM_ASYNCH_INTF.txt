@@ -1,0 +1,9 @@
+*"* components of interface ZII_SI_INB_SUM_ASYNCH
+interface ZII_SI_INB_SUM_ASYNCH
+  public .
+
+
+  methods SI_INB_SUM_ASYNCH
+    importing
+      !INPUT type ZMT_SUM_REQUEST .
+endinterface.
