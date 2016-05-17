@@ -1,0 +1,403 @@
+*&---------------------------------------------------------------------*
+*& Report  ZAVRATESTDOM
+*&
+*&---------------------------------------------------------------------*
+*&
+*&
+*&---------------------------------------------------------------------*
+
+* This program is a detail procedure to convert ABAP to  XML.
+* This program picks sap data and convert into XML files
+************************************************************
+* Inputs
+*    Parameters :
+*    External files: External file will be present inside
+*                    custom table field in XML format.
+* Outputs
+*    Reports: ALV Grid with edit functionality
+*    External files: After making changes the files will
+*                    be stored in corresponding tables in
+*                    XML format
+************************************************************
+REPORT  ZAVRATESTDOM MESSAGE-ID zcif.
+*----------------------------------------------------------------------*
+*                   INCLUDES                                           *
+*----------------------------------------------------------------------*
+
+*----------------------------------------------------------------------*
+*                     TYPE-POOLS                                       *
+*----------------------------------------------------------------------*
+TYPE-POOLS: slis.
+
+*----------------------------------------------------------------------*
+*                     Tables                                           *
+*----------------------------------------------------------------------*
+TABLES : sscrfields.
+*       Structure of XML Data
+TYPES :
+        BEGIN OF t_xml_data,
+          zrownum      TYPE ziem_bat_header-zrownum, "Row Number
+*         Row Detail Number
+          dtl1seqnum   TYPE ziem_bat_detail-dtl1seqnum,
+          recxml       TYPE string,                  "XML Record
+          status(25)   TYPE c,                       "Status
+          userid       TYPE uname,                   "User Name
+          date_changed TYPE aedat,                   "Date Changed On
+*         Time of Last Change
+          time_changed TYPE sy-uzeit,
+          flag(1)      TYPE c,                       "Flag
+        END OF t_xml_data,
+
+*       Structure of ABAP XML Data
+        BEGIN OF t_abap_xml_data,
+          zrownum      TYPE ziem_bat_header-zrownum, "Row Number
+          dtl1seqnum   TYPE ziem_bat_detail-dtl1seqnum,
+          xml_string   TYPE string,
+        END OF t_abap_xml_data.
+DATA :
+*      Transaction Schema
+       i_schema          TYPE  TABLE OF ziem_schema,
+*      Batch header Audit
+       i_bat_hdr_aud     TYPE  TABLE OF ziem_bat_hdr_aud,
+*      Batch detail Audit
+       i_bat_det_aud     TYPE  TABLE OF ziem_bat_det_aud,
+*      Field catalogue for XML
+       i_xml_fldcat      TYPE  lvc_t_fcat,
+*      Field catalogue for XML
+       i_xml_data        TYPE TABLE OF t_xml_data,
+*      XML data identification table
+       i_hdr_cat         TYPE  slis_t_fieldcat_alv.
+
+*----------------------------------------------------------------------*
+*                     WORK AREAS                                       *
+*----------------------------------------------------------------------*
+DATA :,
+       wa_schema          TYPE ziem_schema,
+        wa_hdr_lay         TYPE slis_layout_alv,
+       wa_aud_lay         TYPE slis_layout_alv,
+       wa_errout          TYPE t_err_out,
+       wa_status          TYPE LINE OF ddfixvalues,
+       wa_selfld          TYPE slis_selfield,
+       wa_xml_fldcat      TYPE lvc_s_fcat,
+       wa_xml_data        TYPE t_xml_data,
+       wa_hdr_cat         TYPE LINE OF slis_t_fieldcat_alv.
+*----------------------------------------------------------------------*
+*                   CONSTANTS                                          *
+*----------------------------------------------------------------------*
+
+CONSTANTS:c_true(1)        TYPE c  VALUE 'X',     "Mark flag
+          c_field          TYPE dfies-lfieldname
+                                   VALUE 'STATUS',"Field name
+          c_include(1)     TYPE c  VALUE 'I',     "Include
+*                                   VALUE 'F_SET_PF_STATUS',
+          c_fieldname(9)   TYPE c  VALUE 'FLDNME',"Field Name
+          c_description(4) TYPE c  VALUE 'DESC',  "Description
+          c_itype(8)       TYPE c  VALUE 'ITYPE', "Itype
+          c_intlen(6)      TYPE c  VALUE 'LEN',   "Length
+          c_decimals(8)    TYPE c  VALUE 'DECIMALS',"Decimals
+          c_zrownum(7)     TYPE c  VALUE 'ZROWNUM', "Row Number
+          c_edit(4)        TYPE c  VALUE 'EDIT',  "Edit
+          c_findnext(4)    TYPE c  VALUE '%SC+',
+          c_fld(3)         TYPE c  VALUE 'FLD',.  "Field
+*----------------------------------------------------------------------*
+*                   VARIABLES                                          *
+*----------------------------------------------------------------------*
+DATA : v_okcode          TYPE sy-ucomm,       "User Command
+       v_comments        TYPE ziem_batch_info-zcomment, "Comment
+       v_string          TYPE string,         "String
+       v_answer(1)       TYPE c,              "Answer
+       v_varkey          TYPE rstable-varkey, "Lock key for tables
+       v_lock(1)         TYPE c,              "Lock
+       v_cont_blk(1)     TYPE c,              "Continue Blocking
+       v_commit(1)       TYPE c,              "Commit
+       v_lines           TYPE i,              "Lines
+       v_type            TYPE char1,          "Type
+       v_catalog         TYPE string.
+
+INCLUDE z_ca_iem_abap_to_xml.
+*----------------------------------------------------------------------*
+*                START-OF-SELECTIONS                                   *
+*----------------------------------------------------------------------*
+
+************************************************************
+* Include: Z_CA_IEM_ABAP_TO_XML
+* Title  : Converting ABAP data to XML String              *
+* Where called from: Report Z_CA_REP_000002                *
+************************************************************
+*eject
+*&---------------------------------------------------------------------*
+*&      Form F_ABAP_TO_XML
+*&---------------------------------------------------------------------*
+*       Creating Abap to XML.
+*----------------------------------------------------------------------*
+*      -->pr_dyn_table   Dynamic table
+*      -->pr_type        Type
+*      <--pr_abap_to_xml Ddata
+*----------------------------------------------------------------------*
+FORM f_abap_to_xml TABLES    pr_dyn_table   TYPE STANDARD TABLE
+                             pr_abap_to_xml TYPE STANDARD TABLE
+                   USING     pr_type        TYPE c.
+* Convert the data into HEADER or ITEM format
+  PERFORM f_convert_data TABLES pr_dyn_table
+                                pr_abap_to_xml
+                          USING pr_type   .
+ENDFORM.                    " F_ABAP_TO_XML
+*eject
+*&---------------------------------------------------------------------*
+*&      Form F_CONVERT_DATA
+*&---------------------------------------------------------------------*
+*       Creating Dynamic table and transferring to XML.
+*----------------------------------------------------------------------*
+*      -->pr_dyn_table   Dynamic table
+*      -->pr_type        Type
+*      <--pr_abap_to_xml Data
+*----------------------------------------------------------------------*
+FORM f_convert_data   TABLES pr_dyn_table   TYPE STANDARD TABLE
+                             pr_abap_to_xml TYPE STANDARD TABLE
+                       USING pr_type        TYPE c.
+  DATA : lv_index          TYPE sy-index,
+         lv_fieldvalue(30) TYPE c,
+         lref_newtable     TYPE REF TO data,         "New table
+         lref_newline      TYPE REF TO data.         "Line like new
+  REFRESH i_transfer_table.
+* Build new Field Catalog to remove Rownum,Sequence number
+* Status and Error message
+  CLEAR:wa_xml_fldcat.
+  LOOP AT i_xml_fldcat INTO  wa_xml_fldcat.
+*   If field name is box cotinue
+    IF wa_xml_fldcat-fieldname = c_box.
+      CONTINUE.
+    ENDIF."IF wa_xml_fldcat-fieldname = c_box.
+*   If field name is rownum cotinue
+    IF wa_xml_fldcat-fieldname = c_zrownum.
+      CONTINUE.
+    ENDIF." IF wa_xml_fldcat-fieldname = c_zrownum.
+*   If field name is detail seq no cotinue
+    IF wa_xml_fldcat-fieldname = c_detseq.
+      CONTINUE.
+    ENDIF." IF wa_xml_fldcat-fieldname = c_detseq.
+*   If field is error msg cotinue
+    IF wa_xml_fldcat-fieldname = c_errormsg.
+      CONTINUE.
+    ENDIF."IF wa_xml_fldcat-fieldname = c_errormsg.
+*   If field status cotinue
+    IF wa_xml_fldcat-fieldname = c_status.
+      CONTINUE.
+    ENDIF."IF wa_xml_fldcat-fieldname = c_status.
+*   If field is flag cotinue
+    IF wa_xml_fldcat-fieldname = c_flag.
+      CONTINUE.
+    ENDIF."IF wa_xml_fldcat-fieldname = c_flag.
+*   Transfer rest of the field to another table
+    CLEAR :wa_transfer_table.
+    wa_transfer_table  = wa_xml_fldcat.
+*   If date field change to character as we have conversion issue
+    IF wa_transfer_table-inttype EQ c_date.
+      wa_transfer_table-inttype = c_char.
+      wa_transfer_table-intlen  = c_8.
+    ENDIF."IF wa_transfer_table-inttype = c_date.
+    APPEND wa_transfer_table TO i_transfer_table.
+  ENDLOOP." LOOP AT i_xml_fldcat INTO  wa_xml_fldcat.
+* >> Begin of change DINK900133 FIT2 282
+* Create dynamic internal table
+  CLEAR gref_tab.
+  PERFORM f_build_dynamic_table TABLES i_transfer_table
+                                CHANGING gref_tab.
+  CREATE DATA lref_newtable TYPE HANDLE gref_tab.
+* This dynamic table will contain the data which needs to be
+* converted to the XML Format.
+  ASSIGN lref_newtable->* TO <f_cnv_table>.
+* Create dynamic work area and assign to FS
+  CREATE DATA lref_newline LIKE LINE OF <f_cnv_table>.
+  ASSIGN lref_newline->* TO <f_cnv_wa>.
+* Loop at the dynamic table to populate the values.
+  LOOP AT pr_dyn_table ASSIGNING <f_hdr_wa>.
+*  Get the value of each field
+    DO.
+      CLEAR lv_index.
+      lv_index = sy-index.
+      ASSIGN COMPONENT lv_index OF STRUCTURE
+              <f_hdr_wa> TO <f_dyn_field>.
+      IF sy-subrc NE 0.
+*APPEND wa_abap_to_xml TO i_abap_to_xml."
+        EXIT.
+      ENDIF." IF sy-subrc NE 0.
+*     Get the current field
+      CLEAR wa_xml_fldcat.
+      READ TABLE i_xml_fldcat INTO wa_xml_fldcat
+                                        INDEX lv_index.
+      IF sy-subrc NE 0.
+        CLEAR wa_xml_fldcat.
+      ENDIF."sy-subrc ne 0.
+*     If box continue for next loop
+      IF wa_xml_fldcat-fieldname = c_box.
+        CONTINUE.
+      ENDIF." IF wa_xml_fldcat-fieldname = c_box.
+*     If rownum continue for next loop
+      IF wa_xml_fldcat-fieldname = c_zrownum.
+        v_zrownum =  <f_dyn_field>.
+        CONTINUE.
+      ENDIF." IF wa_xml_fldcat-fieldname = c_zrownum.
+*     Check if it is detail table row
+      IF pr_type EQ c_true.
+*       If box continue for next loop
+        IF wa_xml_fldcat-fieldname = c_detseq.
+          v_dtl1seqnum =  <f_dyn_field>.
+          CONTINUE.
+        ENDIF."IF wa_xml_fldcat-fieldname = c_sequence.
+      ENDIF." IF pr_type EQ c_true.
+*     If error message continue for next loop
+      IF wa_xml_fldcat-fieldname = c_errormsg.
+        CONTINUE.
+      ENDIF."IF wa_xml_fldcat-fieldname = c_errormsg.
+*     If status continue for next loop
+      IF wa_xml_fldcat-fieldname = c_status.
+        CONTINUE.
+      ENDIF." IF wa_xml_fldcat-fieldname = c_status.
+*     If flag continue for next loop
+      IF wa_xml_fldcat-fieldname = c_flag.
+        CONTINUE.
+      ENDIF."IF wa_xml_fldcat-fieldname = c_flag.
+*     populate the field value
+      lv_fieldvalue = <f_dyn_field>.
+*     Assign value to conversion work area
+      ASSIGN COMPONENT wa_xml_fldcat-fieldname
+            OF STRUCTURE <f_cnv_wa> TO  <f_cnv_field>.
+      IF sy-subrc EQ 0.
+*       Append values to the dynamic internal table
+        <f_cnv_field> = lv_fieldvalue.
+        IF wa_xml_fldcat-inttype EQ c_numc.
+*         Convert numeric to external format
+          CALL FUNCTION 'CONVERSION_EXIT_ALPHA_OUTPUT'
+            EXPORTING
+              input  = <f_cnv_field>
+            IMPORTING
+              output = <f_cnv_field>.
+          UNASSIGN <f_cnv_field>.
+        ENDIF." IF wa_xml_fldcat-inttype EQ c_numc.
+      ELSE.
+        EXIT.
+      ENDIF." IF sy-subrc EQ 0.
+    ENDDO.
+    UNASSIGN <f_cnv_field>.
+    CLEAR   <f_cnv_table>.
+    APPEND  <f_cnv_wa> TO <f_cnv_table>.
+    CLEAR   <f_cnv_wa>.
+*   Create in XML format.
+    PERFORM f_create_xml TABLES pr_abap_to_xml.
+  ENDLOOP."LOOP AT pr_dyn_table ASSIGNING <f_hdr_wa>.
+ENDFORM.                    " F_CONVERT_DATA
+*&---------------------------------------------------------------------*
+*&      Form F_DATA_TO_DOM
+*&---------------------------------------------------------------------*
+*       Converting DATA to DOM.
+*----------------------------------------------------------------------*
+*      No parameter
+*&---------------------------------------------------------------------*
+FORM f_data_to_dom  .
+* Converting DATA to DOM.
+  CALL FUNCTION 'SDIXML_DATA_TO_DOM'
+    EXPORTING
+      name         = c_ter
+      dataobject   = <f_cnv_table>
+    IMPORTING
+      data_as_dom  = gref_dom
+    CHANGING
+      document     = gref_document
+    EXCEPTIONS
+      illegal_name = 1
+      OTHERS       = 2.
+  IF sy-subrc NE 0.
+    CLEAR gref_document.
+  ENDIF."sy-subrc NE 0.
+ENDFORM.                    " F_DATA_TO_DOM
+*eject
+*&---------------------------------------------------------------------*
+*&      Form F_DOM_TO_XML
+*&---------------------------------------------------------------------*
+*       Converting DOM to XML.
+*----------------------------------------------------------------------*
+*      No parameter
+*&---------------------------------------------------------------------*
+FORM f_dom_to_xml .
+  CHECK NOT gref_dom IS INITIAL.
+* Please do not delete this code. It is used to get the next child
+  v_subrc = gref_document->append_child( new_child = gref_dom ).
+* Get XML Binary format
+  CALL FUNCTION 'SDIXML_DOM_TO_XML'
+    EXPORTING
+      document     = gref_document
+    IMPORTING
+      size         = v_size
+    TABLES
+      xml_as_table = i_xml
+   EXCEPTIONS
+      no_document  = 1
+      OTHERS       = 2.
+  IF sy-subrc NE 0.
+    CLEAR v_size.
+  ENDIF."sy-subrc NE 0.
+ENDFORM.                    " F_DOM_TO_XML
+*&---------------------------------------------------------------------*
+*&      Form F_BINARY_TO_STRING
+*&---------------------------------------------------------------------*
+*       Converting Binary data to string format .
+*----------------------------------------------------------------------*
+*      No parameter
+*&---------------------------------------------------------------------*
+FORM f_binary_to_string .
+* Get the XML string data
+  CALL FUNCTION 'SCMS_BINARY_TO_STRING'
+    EXPORTING
+      input_length = v_size
+    IMPORTING
+      text_buffer  = v_xml
+    TABLES
+      binary_tab   = i_xml "i_xml_binary
+    EXCEPTIONS
+      failed       = 1
+      OTHERS       = 2.
+  IF sy-subrc NE 0.
+    CLEAR v_xml.
+  ENDIF."sy-subrc NE 0.
+ENDFORM.                    " F_BINARY_TO_STRING
+*&---------------------------------------------------------------------*
+*&      Form F_CREATE_XML
+*&---------------------------------------------------------------------*
+*       Converting Binary data to string format .
+*----------------------------------------------------------------------*
+*      <--pr_abap_to_xml XML data
+*&---------------------------------------------------------------------*
+FORM f_create_xml TABLES pr_abap_to_xml TYPE STANDARD TABLE  .
+  CLASS
+       cl_ixml DEFINITION LOAD.
+  gref_ixml = cl_ixml=>create( ).
+* Creat document
+  CHECK NOT gref_ixml  IS INITIAL.
+  gref_document = gref_ixml->create_document( ).
+  CHECK NOT gref_document IS INITIAL.
+* Converting DATA to DOM.
+  PERFORM f_data_to_dom .
+  CHECK NOT gref_dom IS INITIAL.
+* Converting DOM to XMl Binary.
+  PERFORM f_dom_to_xml.
+* Converting Binary to string
+  PERFORM f_binary_to_string.
+  CLEAR wa_abap_to_xml.
+* Popluate row num and XMl string
+  wa_abap_to_xml-zrownum      = v_zrownum.
+  wa_abap_to_xml-xml_string   = v_xml.
+* If detail record populate detail seq no
+  IF v_type = c_true.
+    wa_abap_to_xml-dtl1seqnum = v_dtl1seqnum.
+  ENDIF."IF v_type = c_true.
+* Append the XML data table
+  APPEND wa_abap_to_xml TO pr_abap_to_xml.
+  CLEAR wa_abap_to_xml.
+ENDFORM.                    " F_CREATE_XML
+
+************************************************************
+* Include: Z_CA_IEM_GLOBAL      *
+* Title  : Include for global definitions, selection screen*
+* Where called from: Report Z_CA_REP_000002                *
+************************************************************
