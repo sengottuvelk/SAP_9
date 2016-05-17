@@ -1,0 +1,3 @@
+method CONSTRUCTOR.
+"me->x = '2'.
+endmethod.
