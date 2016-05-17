@@ -1,0 +1,947 @@
+FUNCTION Z_AQ_CHANGE_LOG.
+*"----------------------------------------------------------------------
+*"*"Local Interface:
+*"  IMPORTING
+*"     REFERENCE(DATEFROM) TYPE  DATUM DEFAULT SY-DATUM
+*"  CHANGING
+*"     REFERENCE(T_USERS) TYPE  Z_USERS
+*"     REFERENCE(T_E071K) TYPE  Z_E071K OPTIONAL
+*"     REFERENCE(T_E070) TYPE  Z_E070 OPTIONAL
+*"     REFERENCE(T_E071) TYPE  Z_E071 OPTIONAL
+*"     REFERENCE(T_ABAPTXT255_TAB) TYPE  ABAPTXT255_TAB OPTIONAL
+*"     REFERENCE(T_TRDIR_IT) TYPE  TRDIR_IT OPTIONAL
+*"     REFERENCE(T_SMODILOGTB) TYPE  SMODILOGTB OPTIONAL
+*"     REFERENCE(T_TEXTPOOL) TYPE  TEXTPOOL_TABLE OPTIONAL
+*"----------------------------------------------------------------------
+  TYPE-POOLS: abap.
+*Constants
+  CONSTANTS: c_task_wb type TRFUNCTION value 'S'.
+  CONSTANTS: c_task_cust type TRFUNCTION value 'Q'.
+  CONSTANTS: c_modif_d type TRSTATUS value 'D'.
+  CONSTANTS: c_modif_l type TRSTATUS value 'L'.
+  CONSTANTS: c_modif_o type TRSTATUS value 'O'.
+  CONSTANTS: c_modif_r type TRSTATUS value 'R'.
+  CONSTANTS: c_modif_n type TRSTATUS value 'N'.
+
+
+  DATA: user type uname.
+  DATA: objname type VERSOBJNAM.
+  DATA: objname_rept type char34.
+  DATA: t_e070_open     type TABLE OF e070.
+  DATA: t_e070_released type TABLE OF e070.
+  DATA: t_e071_workbench type table of e071.
+  DATA: t_e071k_custom type table of E071k.
+  DATA: t_dd03v type TABLE OF dd03v.
+  DATA: t_dd02tv type TABLE OF dd02tv.
+  DATA: t_dd02v type TABLE OF dd02v.
+  DATA: s_dd02v type dd02v.
+  DATA: t_config type ztt_config.
+  DATA: s_config TYPE zlt_config.
+  data: s_dd03v type dd03v.
+  data: s_dd02tv type dd02tv.
+  DATA: s_e071k_custom type E071k.
+  DATA: s_e071_workbench type e071.
+  DATA: s_e070          type e070.
+  DATA: s_abaptxt255   type abaptxt255.
+  DATA: s_textpool type textpool.
+  DATA: s_trdir type trdir.
+
+
+
+  DATA: begin of ls_work,
+           uname type uname,
+           lt_abap  type abaptxt255_tab,
+           lt_trdir type trdir_it,
+           lt_dd04v type TABLE OF dd04v,
+           lt_dd01v type TABLE OF dd01v,
+           lt_dd07v type TABLE OF dd07v,
+           lt_dd02v type TABLE OF dd02v,
+           lt_dd03v type TABLE OF dd03v,
+           lt_dd40v TYPE TABLE OF dd40v,
+           lt_textpool type TABLE OF textpool,
+           lt_config type table of zlt_config,
+       end of ls_work.
+
+  DATA:  ls_work_user like ls_work.
+  DATA: tt_work_user type ZTTWORK_USER.
+
+  select * FROM e070 INTO TABLE t_e070_open
+    where ( trfunction = c_task_wb
+       OR   trfunction = c_task_cust )
+    and  ( trstatus   = c_modif_d
+       OR  trstatus    = c_modif_l ).
+
+  select * FROM e070 INTO TABLE t_e070_released
+   where ( trfunction  = c_task_wb
+       OR  trfunction  = c_task_cust )
+   and  (  trstatus    = c_modif_o
+        OR trstatus    = c_modif_r
+        OR trstatus    = c_modif_n )
+   and     as4date     = sy-datum  . "NOTE THIS SHOULD BE A PARAMETER IN THE FM
+
+
+
+
+  loop at t_users INTO user.
+
+    ls_work_user-uname = user.
+    clear t_e071_workbench.
+    refresh t_e071_workbench.
+*Do workbench tansports first!
+*** find relevant transports being worked on or released today
+    loop at t_e070_open into s_e070 where as4user     = user
+                                    AND   trfunction  = c_task_wb."Workbench only
+
+
+      select  * from e071 into table t_e071_workbench
+        where trkorr = s_e070-trkorr.
+      loop at t_e071_workbench into s_e071_workbench.
+
+        "Note - if PROG - it is necessary to check both REPS and REPT
+        "At the moment I am only checking REPS for PROG
+
+        CASE s_e071_workbench-object.
+
+          WHEN 'REPT'.
+
+            objname_rept = s_e071_workbench-obj_name.
+            clear: t_textpool[].
+            clear: t_trdir_it[].
+
+            CALL FUNCTION 'SVRS_GET_VERSION_REPT'
+              EXPORTING
+                OBJECT_NAME = objname_rept
+                VERSNO      = '99999'
+              TABLES
+                REPOT_TAB   = T_TEXTPOOL
+                TRDIR_TAB   = T_TRDIR_IT
+              EXCEPTIONS
+                NO_VERSION  = 1
+                OTHERS      = 2.
+            IF T_TEXTPOOL IS INITIAL.
+              CALL FUNCTION 'SVRS_GET_VERSION_REPT'
+                EXPORTING
+                  OBJECT_NAME = objname_rept
+                  VERSNO      = '00000'
+                TABLES
+                  REPOT_TAB   = T_TEXTPOOL
+                  TRDIR_TAB   = T_TRDIR_IT
+                EXCEPTIONS
+                  NO_VERSION  = 1
+                  OTHERS      = 2.
+            ENDIF.
+
+            CLEAR s_trdir.
+            READ TABLE t_trdir_it INTO s_trdir INDEX 1.
+            if   s_trdir-udat ge datefrom  "Only get reports from the date from
+              or s_trdir-cdat ge datefrom.
+              loop at t_textpool into s_textpool.
+*               write: / s_textpool-id, s_textpool-id, s_textpool-entry.
+              endloop.
+              append lines of t_textpool to ls_work_user-lt_textpool.
+              append LINES OF t_trdir_it to ls_work_user-lt_trdir.
+            endif.
+          WHEN 'IDOC'. "IDOC type - Note there is no version managemnt
+            data: idoccreatedate type datum. "date of idoc create
+            data: idocchangedate type datum. "date of idoc change
+            data: idocedi_idoctp type EDI_IDOCTP. "idOC type
+            idocedi_idoctp = s_e071_workbench-obj_name.
+            select single credate ldate from edbas into (idoccreatedate, idocchangedate)
+                                 where idoctyp = idocedi_idoctp
+                                 or    credate = sy-datum
+                                 or    ldate   = sy-datum.
+            if sy-subrc ne 0.
+              CONTINUE.
+            endif.
+
+*            write:/, 'IDoc Type'.
+
+            if idoccreatedate = sy-datum.
+*              write: /, idocedi_idoctp, 'was created'.
+            endif.
+
+            if idocchangedate = sy-datum.
+*              write: /, idocedi_idoctp, 'was changed'.
+            endif.
+
+
+
+          WHEN 'TTYP'. "TABLE TYPE
+            data: t_dd40v TYPE TABLE OF dd40v.
+            data: s_dd40v TYPE dd40v.
+            clear: t_dd40v[].
+            objname = s_e071_workbench-obj_name.
+            CALL FUNCTION 'SVRS_GET_VERSION_TTYD_40'
+              EXPORTING
+*               DESTINATION                        =
+                OBJECT_NAME                        = objname
+                VERSNO                             = '99999'
+*               IV_NO_RELEASE_TRANSFORMATION       =
+*             IMPORTING
+*               INFO_LINE                          =
+              TABLES
+*               VSMODISRC                          =
+*               DD40TV_TAB                         =
+                DD40V_TAB                          = t_dd40v
+*               DD42V_TAB                          =
+*               DD43TV_TAB                         =
+*               DD43V_TAB                          =
+*               VSMODILOG                          =
+             EXCEPTIONS
+               NO_VERSION                         = 1
+               SYSTEM_FAILURE                     = 2
+               COMMUNICATION_FAILURE              = 3
+               OTHERS                             = 4
+                      .
+            IF t_dd40v is INITIAL.
+
+              CALL FUNCTION 'SVRS_GET_VERSION_TTYD_40'
+                EXPORTING
+*               DESTINATION                        =
+                  OBJECT_NAME                        = objname
+                  VERSNO                             = '00000'
+*               IV_NO_RELEASE_TRANSFORMATION       =
+*             IMPORTING
+*               INFO_LINE                          =
+                TABLES
+*               VSMODISRC                          =
+*               DD40TV_TAB                         =
+                  DD40V_TAB                          = t_dd40v
+*               DD42V_TAB                          =
+*               DD43TV_TAB                         =
+*               DD43V_TAB                          =
+*               VSMODILOG                          =
+                EXCEPTIONS
+                  NO_VERSION                         = 1
+                  SYSTEM_FAILURE                     = 2
+                  COMMUNICATION_FAILURE              = 3
+                  OTHERS                             = 4
+                        .
+            ENDIF.
+            READ TABLE t_dd40v INTO s_dd40v INDEX 1.
+            if s_dd40v-as4date ge datefrom.  "Check the date of the table created after datefrom
+*              write: / 'TABLE TYPE'.
+*              write: / s_dd40V-typename, s_dd40v-ddtext, 'with linetype', s_dd40v-rowtype.
+              append LINES OF t_dd40v to ls_work_user-lt_dd40v.
+            endif.
+
+          WHEN 'TABD' or 'TABL'.
+            objname = s_e071_workbench-obj_name.
+            clear: t_dd02tv[].
+            clear: t_dd03v[].
+            CALL FUNCTION 'SVRS_GET_VERSION_TABD_40'
+              EXPORTING
+*               DESTINATION                        =
+                OBJECT_NAME                        = objname
+                VERSNO                             = '99999'
+*               IV_NO_RELEASE_TRANSFORMATION       =
+*             IMPORTING
+*               INFO_LINE                          =
+              TABLES
+*               VSMODISRC                          =
+                DD02TV_TAB                         = t_dd02tv
+                DD02V_TAB                          = t_dd02v
+*               DD03TV_TAB                         =
+                DD03V_TAB                          = t_dd03v
+*               DD05V_TAB                          =
+*               DD08TV_TAB                         =
+*               DD08V_TAB                          =
+*               DD35V_TAB                          =
+*               DD36V_TAB                          =
+*               VSMODILOG                          =
+              EXCEPTIONS
+                NO_VERSION                         = 1
+                SYSTEM_FAILURE                     = 2
+                COMMUNICATION_FAILURE              = 3
+                OTHERS                             = 4
+                      .
+            IF t_dd02tv is INITIAL .
+              CALL FUNCTION 'SVRS_GET_VERSION_TABD_40'
+                EXPORTING
+*               DESTINATION                        =
+                  OBJECT_NAME                        = objname
+                  VERSNO                             = '00000'
+*               IV_NO_RELEASE_TRANSFORMATION       =
+*             IMPORTING
+*               INFO_LINE                          =
+                TABLES
+*               VSMODISRC                          =
+                DD02TV_TAB                         = t_dd02tv
+                DD02V_TAB                          = t_dd02v
+*               DD03TV_TAB                         =
+                  DD03V_TAB                          = t_dd03v
+*               DD05V_TAB                          =
+*               DD08TV_TAB                         =
+*               DD08V_TAB                          =
+*               DD35V_TAB                          =
+*               DD36V_TAB                          =
+*               VSMODILOG                          =
+                EXCEPTIONS
+                  NO_VERSION                         = 1
+                  SYSTEM_FAILURE                     = 2
+                  COMMUNICATION_FAILURE              = 3
+                  OTHERS                             = 4
+                        .
+            ENDIF.
+            READ TABLE t_dd02tv INTO s_dd02tv INDEX 1.
+            read table t_dd02v  INTO s_dd02v INDEX 1.
+            if s_dd02v-as4date ge datefrom.
+*              write: / 'Table'.
+*              write: / s_dd02tv-tabname, s_dd02tv-ddtext.
+              LOOP at t_dd03v INTO s_dd03v.
+*                write: /, space, s_dd03v-fieldname.
+              endloop.
+              append LINES OF t_dd02v to ls_work_user-lt_dd02V.
+              append LINES OF t_dd03v to ls_work_user-lt_dd03V.
+            endif.
+
+          when 'FUGR'.
+            "Function group - Step 1 - search the TOP
+            "Global declarations, which is program name
+            "L+FUGR+TOP. This can then be handled in the
+            "same way as a report. Use the object type
+            "REPS in the function modules!
+
+            DATA: programm type programm.
+            DATA: objtype type VERSOBJTYP.
+            data: t_funcname type TABLE OF funcname.
+            data: funcname type funcname.
+            CONCATENATE 'L' s_e071_workbench-obj_name 'TOP' INTO  programm.
+            objname = programm.
+            objtype = 'REPS'. "Get the report not the FuGr
+*            write: / 'FUNCTION GROUP', s_e071_workbench-obj_name.
+            clear: T_ABAPTXT255_TAB[].
+            clear: T_TRDIR_IT[].
+            CALL FUNCTION 'SVRS_GET_REPS_FROM_OBJECT'
+              EXPORTING
+                OBJECT_NAME                  = objname
+                OBJECT_TYPE                  = objtype
+                VERSNO                       = '99999' "Modified not active
+*               DESTINATION                  = ' '
+*               IV_NO_RELEASE_TRANSFORMATION = ' '
+              TABLES
+                REPOS_TAB                    = T_ABAPTXT255_TAB
+                TRDIR_TAB                    = T_TRDIR_IT
+*               VSMODISRC                    =
+*               VSMODILOG                    =
+              EXCEPTIONS
+                NO_VERSION                   = 1
+                OTHERS                       = 2.
+*       IF SY-SUBRC <> 0.
+            if T_ABAPTXT255_TAB is initial.
+
+              CALL FUNCTION 'SVRS_GET_REPS_FROM_OBJECT'
+                EXPORTING
+                  OBJECT_NAME                  = objname
+                  OBJECT_TYPE                  = objtype
+                  VERSNO                       = '00000' "The active versions
+*                 DESTINATION                  = ' '
+*                 IV_NO_RELEASE_TRANSFORMATION = ' '
+                TABLES
+                  REPOS_TAB                    = T_ABAPTXT255_TAB
+                  TRDIR_TAB                    = T_TRDIR_IT
+*                 VSMODISRC                    =
+*                 VSMODILOG                    =
+                EXCEPTIONS
+                  NO_VERSION                   = 1
+                  OTHERS                       = 2.
+            ENDIF.
+
+            Loop at t_abaptxt255_tab INTO s_abaptxt255.
+*              write: / s_abaptxt255.
+            endloop.
+            "Function group - Step 2 - search table TFDIR for
+            "all function modules in the Function Group
+            "This is done by search TFDIR-pname = Function group
+            SELECT funcname from tfdir INTO TABLE t_funcname
+              where pname = s_e071_workbench-obj_name.
+            loop at t_funcname into funcname.
+              objname = funcname.
+              CALL FUNCTION 'SVRS_GET_REPS_FROM_OBJECT'
+                EXPORTING
+                  OBJECT_NAME                  = objname
+                  OBJECT_TYPE                  = objtype
+                  VERSNO                       = '99999' "Modified not active
+*                 DESTINATION                  = ' '
+*                 IV_NO_RELEASE_TRANSFORMATION = ' '
+                TABLES
+                  REPOS_TAB                    = T_ABAPTXT255_TAB
+                  TRDIR_TAB                    = T_TRDIR_IT
+*                 VSMODISRC                    =
+*                 VSMODILOG                    =
+                EXCEPTIONS
+                  NO_VERSION                   = 1
+                  OTHERS                       = 2.
+*       IF SY-SUBRC <> 0.
+              if T_ABAPTXT255_TAB is initial.
+
+                CALL FUNCTION 'SVRS_GET_REPS_FROM_OBJECT'
+                  EXPORTING
+                    OBJECT_NAME                  = objname
+                    OBJECT_TYPE                  = objtype
+                    VERSNO                       = '00000' "The active versions
+*                   DESTINATION                  = ' '
+*                   IV_NO_RELEASE_TRANSFORMATION = ' '
+                  TABLES
+                    REPOS_TAB                    = T_ABAPTXT255_TAB
+                    TRDIR_TAB                    = T_TRDIR_IT
+*                   VSMODISRC                    =
+*                   VSMODILOG                    =
+                  EXCEPTIONS
+                    NO_VERSION                   = 1
+                    OTHERS                       = 2.
+              ENDIF.
+
+              Loop at t_abaptxt255_tab INTO s_abaptxt255.
+*                write: / s_abaptxt255.
+              endloop.
+              append LINES OF t_abaptxt255_tab to ls_work_user-lt_abap.
+              append lines of t_trdir_it to ls_work_user-lt_trdir.
+            endloop.
+          when 'DOMA'.
+            data: t_dd01v type TABLE OF dd01v.
+            data: s_dd01v type dd01v.
+            data: t_dd07v type TABLE OF dd07v.
+
+            objname = s_e071_workbench-obj_name.
+            clear: t_dd01v[].
+            CALL FUNCTION 'SVRS_GET_VERSION_DOMD_40'
+              EXPORTING
+*               DESTINATION                        =
+                OBJECT_NAME                        = objname
+                VERSNO                             = '99999'
+*               IV_NO_RELEASE_TRANSFORMATION       =
+*             IMPORTING
+*               INFO_LINE                          =
+              TABLES
+*               VSMODISRC                          =
+*               DD01TV_TAB                         =
+                DD01V_TAB                          = t_dd01v
+*               DD07TV_TAB                         =
+                DD07V_TAB                          = t_dd07v
+*               VSMODILOG                          =
+             EXCEPTIONS
+               NO_VERSION                         = 1
+               SYSTEM_FAILURE                     = 2
+               COMMUNICATION_FAILURE              = 3
+               OTHERS                             = 4
+                      .
+            IF t_dd01v is INITIAL.
+              CALL FUNCTION 'SVRS_GET_VERSION_DOMD_40'
+                EXPORTING
+*               DESTINATION                        =
+                  OBJECT_NAME                        = objname
+                  VERSNO                             = '00000'
+*               IV_NO_RELEASE_TRANSFORMATION       =
+*             IMPORTING
+*               INFO_LINE                          =
+                TABLES
+*               VSMODISRC                          =
+*               DD01TV_TAB                         =
+                  DD01V_TAB                          = t_dd01v
+*               DD07TV_TAB                         =
+                DD07V_TAB                          =  t_dd07v
+*               VSMODILOG                          =
+               EXCEPTIONS
+                 NO_VERSION                         = 1
+                 SYSTEM_FAILURE                     = 2
+                 COMMUNICATION_FAILURE              = 3
+                 OTHERS                             = 4
+                        .
+            ENDIF.
+            READ TABLE t_dd01v INTO s_dd01v INDEX 1.
+            if s_dd01v-as4date ge datefrom.
+              loop at t_dd01v INTO s_dd01v.
+*                write: /, 'Domain'.
+*                WRITE: /, s_dd01v-domname, s_dd01v-datatype, s_dd01v-leng, s_dd01v-ddtext.
+              ENDLOOP.
+
+              append LINES OF t_dd01v to ls_work_user-lt_dd01v.
+              append LINES OF t_dd07v to ls_work_user-lt_dd07v.
+            endif.
+
+          when 'DTEL'.
+            data:  dd04v_tab type TABLE OF dd04v.
+            data:  s_dd04v type dd04v.
+            objname = s_e071_workbench-obj_name.
+            clear: dd04v_tab[].
+
+            CALL FUNCTION 'SVRS_GET_VERSION_DTED_40'
+              EXPORTING
+*               DESTINATION                        =
+                OBJECT_NAME                        = objname
+                VERSNO                             = '99999'
+*               IV_NO_RELEASE_TRANSFORMATION       =
+*             IMPORTING
+*               INFO_LINE                          =
+              TABLES
+*               VSMODISRC                          =
+*               DD04TV_TAB                         =
+                DD04V_TAB                          = dd04v_tab
+*               VSMODILOG                          =
+             EXCEPTIONS
+               NO_VERSION                         = 1
+               SYSTEM_FAILURE                     = 2
+               COMMUNICATION_FAILURE              = 3
+               OTHERS                             = 4
+                      .
+            IF dd04v_tab is initial.
+              CALL FUNCTION 'SVRS_GET_VERSION_DTED_40'
+                            EXPORTING
+*               DESTINATION                        =
+                              OBJECT_NAME                        = objname
+                              VERSNO                             = '00000'
+*               IV_NO_RELEASE_TRANSFORMATION       =
+*             IMPORTING
+*               INFO_LINE                          =
+                            TABLES
+*               VSMODISRC                          =
+*               DD04TV_TAB                         =
+                              DD04V_TAB                          = dd04v_tab
+*               VSMODILOG                          =
+                           EXCEPTIONS
+                             NO_VERSION                         = 1
+                             SYSTEM_FAILURE                     = 2
+                             COMMUNICATION_FAILURE              = 3
+                             OTHERS                             = 4
+                                    .
+            ENDIF.
+            READ TABLE dd04v_tab INTO s_dd04v index 1.
+            if s_dd04v-as4date ge datefrom.
+              LOOP AT DD04V_TAB INTO S_DD04V.
+*                WRITE: /, 'Data Element'.
+*                WRITE: /, S_DD04v-ROLLNAME, S_DD04v-DOMNAME, S_DD04v-DDTEXT.
+              ENDLOOP  .
+              append LINES OF dd04v_tab to ls_work_user-lt_dd04v.
+            endif.
+
+          WHEN OTHERS.
+            if s_e071_workbench-object = 'PROG'.
+              s_e071_workbench-object = 'REPS'.
+            endif.
+
+            objname = s_e071_workbench-obj_name.
+
+
+            clear: T_ABAPTXT255_TAB[].
+            clear: T_TRDIR_IT[].
+            CALL FUNCTION 'SVRS_GET_REPS_FROM_OBJECT'
+              EXPORTING
+                OBJECT_NAME                  = objname
+                OBJECT_TYPE                  = s_e071_workbench-object
+                VERSNO                       = '99999' "Modified not active
+*               DESTINATION                  = ' '
+*               IV_NO_RELEASE_TRANSFORMATION = ' '
+              TABLES
+                REPOS_TAB                    = T_ABAPTXT255_TAB
+                TRDIR_TAB                    = T_TRDIR_IT
+*               VSMODISRC                    =
+*               VSMODILOG                    =
+              EXCEPTIONS
+                NO_VERSION                   = 1
+                OTHERS                       = 2.
+*       IF SY-SUBRC <> 0.
+            if T_ABAPTXT255_TAB is initial.
+
+              CALL FUNCTION 'SVRS_GET_REPS_FROM_OBJECT'
+                EXPORTING
+                  OBJECT_NAME                  = objname
+                  OBJECT_TYPE                  = s_e071_workbench-object
+                  VERSNO                       = '00000' "The active versions
+*                 DESTINATION                  = ' '
+*                 IV_NO_RELEASE_TRANSFORMATION = ' '
+                TABLES
+                  REPOS_TAB                    = T_ABAPTXT255_TAB
+                  TRDIR_TAB                    = T_TRDIR_IT
+*                 VSMODISRC                    =
+*                 VSMODILOG                    =
+                EXCEPTIONS
+                  NO_VERSION                   = 1
+                  OTHERS                       = 2.
+            ENDIF.
+            CLEAR s_trdir.
+            READ TABLE t_trdir_it INTO s_trdir INDEX 1.
+            if   s_trdir-udat ge datefrom
+              or s_trdir-cdat ge datefrom.
+              data: lv_lines type i.
+              clear s_abaptxt255.
+              s_abaptxt255 = 'START:'.
+              s_abaptxt255+7(110) = objname.
+              s_abaptxt255+117(4) = s_e071_workbench-object.
+              insert s_abaptxt255 into t_abaptxt255_tab index 1.
+              lv_lines = lines( t_abaptxt255_tab ).
+              lv_lines = lv_lines + 1.
+              clear s_abaptxt255.
+              s_abaptxt255 = 'FINISH:'.
+              s_abaptxt255+7(110) = objname.
+              s_abaptxt255+117(4) = s_e071_workbench-object.
+              insert s_abaptxt255 into t_abaptxt255_tab index lv_lines.
+              Loop at t_abaptxt255_tab INTO s_abaptxt255.
+*                write: / s_abaptxt255.
+              endloop.
+              append LINES OF t_abaptxt255_tab  to ls_work_user-lt_abap.
+              append LINES OF t_trdir_it to ls_work_user-lt_trdir.
+            endif.
+        ENDCASE.
+      endloop.
+    endloop.
+
+*********************************************************
+* Customising
+*********************************************************
+
+    DATA: go_strucdescr   TYPE REF TO cl_abap_structdescr.
+    DATA: gt_tab_fields   TYPE ddfields.
+    DATA: begin of gs_where,
+             condition(72).
+    DATA: end of gs_where.
+    DATA: gt_where like TABLE OF gs_where.
+    DATA: gv_offset type i.
+    DATA: gv_key_length type i.
+    DATA: gv_key_found(1).
+    DATA: lt_dba_sellist type TABLE OF  VIMSELLIST.
+    DATA: ls_dba_sellist TYPE VIMSELLIST.
+
+    FIELD-SYMBOLS: <gwa_tab_field> TYPE dfies.
+    loop at t_e070_open into s_e070 where as4user     = user
+                                AND   trfunction  = c_task_cust."Customsing only
+      clear gv_key_found. "This is used to indicate the view key was found in the customising tport
+      at first.
+*        write: /, / 'Customising'.
+      endat.
+
+*      write / s_e070-trkorr.
+      select  * from e071k into table t_e071k_custom
+  where trkorr = s_e070-trkorr.
+      loop at t_e071k_custom into s_e071k_custom.
+         CHECK s_e071k_custom-viewname is not initial.
+*        write:/ s_e071k_custom-mastername,  s_e071k_custom-tabkey.
+        gv_key_length = strlen( s_e071k_custom-tabkey ).
+        TRY .
+*   Get the details of the DDIC table
+            go_strucdescr ?= cl_abap_elemdescr=>describe_by_name( s_e071k_custom-viewname ).
+          CATCH cx_sy_move_cast_error .
+            MESSAGE 'Error while casting' TYPE 'S'. RETURN.
+        ENDTRY.
+        gt_tab_fields = go_strucdescr->get_ddic_field_list( ).
+        clear gt_where[].
+        clear gv_offset.
+
+        LOOP AT gt_tab_fields ASSIGNING <gwa_tab_field> WHERE keyflag = 'X'.
+*          WRITE: / <gwa_tab_field>-fieldname.
+          CONCATENATE '''' <gwa_tab_field>-fieldname '''' INTO ls_dba_sellist-viewfield.
+          ls_DBA_SELLIST-OPERATOR = 'EQ'.
+
+          "fill up where condition
+          if sy-tabix = 1.
+*           CONCATENATE <gwa_tab_field>-fieldname space '=' space '''' s_e071k_custom-tabkey(<gwa_tab_field>-leng) '''' into gs_where.
+            CONCATENATE '''' s_e071k_custom-tabkey(<gwa_tab_field>-leng) '''' into gs_where.
+            CONCATENATE <gwa_tab_field>-fieldname  ' = ' gs_where into gs_where RESPECTING BLANKS.
+
+          else.
+*            CONCATENATE <gwa_tab_field>-fieldname '='  '''' s_e071k_custom-tabkey+gv_offset(<gwa_tab_field>-leng) '''' into gs_where.
+*            CONCATENATE 'AND ' gs_where into gs_where RESPECTING BLANKS.
+            CONCATENATE '''' s_e071k_custom-tabkey+gv_offset(<gwa_tab_field>-leng) '''' into gs_where.
+            ls_dba_sellist-value = gs_where.
+            CONCATENATE <gwa_tab_field>-fieldname  ' = ' gs_where into gs_where RESPECTING BLANKS.
+            CONCATENATE 'AND ' gs_where into gs_where RESPECTING BLANKS.
+          ENDIF.
+          add <gwa_tab_field>-leng to gv_offset.
+          append gs_where to gt_where.
+          append ls_dba_sellist to lt_dba_sellist.
+        ENDLOOP.
+*Do dynamic select on the configuration key
+        data:     dref        TYPE REF TO data,
+                  itab_type   TYPE REF TO cl_abap_tabledescr,
+                  struct_type TYPE REF TO cl_abap_structdescr,
+                  elem_type   TYPE REF TO cl_abap_elemdescr,
+                  comp_tab    TYPE cl_abap_structdescr=>component_table.
+
+        FIELD-SYMBOLS : <lt_outtab> TYPE ANY TABLE.
+        struct_type ?= cl_abap_typedescr=>describe_by_name( s_e071k_custom-viewname ).
+        comp_tab = struct_type->get_components( ).
+        struct_type = cl_abap_structdescr=>create( comp_tab ).
+        itab_type   = cl_abap_tabledescr=>create( struct_type ).
+
+        CREATE DATA dref TYPE HANDLE itab_type.
+        ASSIGN dref->* TO <lt_outtab>.
+        DATA: BEGIN OF lt_view_data OCCURS 1,
+        c TYPE c LENGTH 8182, " max length
+        END OF lt_view_data .
+        DATA: ls_view_data like lt_view_data.
+        CALL FUNCTION 'VIEW_GET_DATA'
+          EXPORTING
+            VIEW_NAME              = s_e071k_custom-viewname
+          TABLES
+*           DBA_SELLIST            = lt_dba_sellist ""NOTE THIS IS NOT WORKING
+            DATA                   = lt_view_data
+          EXCEPTIONS
+            NO_VIEWMAINT_TOOL      = 1
+            NO_AUTHORITY           = 2
+            NO_AUTH_FOR_SEL        = 3
+            DATA_ACCESS_RESTRICTED = 4
+            NO_FUNCTIONGROUP       = 5
+            OTHERS                 = 6.
+        IF SY-SUBRC <> 0.
+* Implement suitable error handling here
+        ENDIF.
+
+        loop at lt_view_data INTO ls_view_data.
+          if ls_view_data-c(gv_key_length) = s_e071k_custom-tabkey.
+            gv_key_found = 'X'.
+            s_config-e071k  = s_e071k_custom.
+            s_config-values = ls_view_data(2048).
+            exit."Key found -
+          endif.
+        endloop.
+
+*        SELECT * from (s_e071k_custom-viewname)
+*        INTO TABLE <lt_outtab>
+*        WHERE    (gt_where).
+
+        if gv_key_found = 'X'.
+          append s_config to t_config.
+          exit. "The key to the customising transport is found
+        endif.
+
+      endloop. "All the customising tables belonging to a tr
+    endloop. "all customissing transports for the user
+    append LINES OF t_config to ls_work_user-lt_config.
+
+*********UPDATE THE USER TABLE WITH WB AND CONGIF
+    APPEND ls_work_user to tt_work_user.
+************************************************
+
+
+    DATA: gt_source_itab TYPE abap_trans_srcbind_tab,
+          gs_source_wa   TYPE abap_trans_resbind.
+    CONSTANTS gv_file TYPE string VALUE 'C:\Users\pi063\Documents\ABAP to XML.xml'.
+*DATA: gt_itab        TYPE STANDARD TABLE OF char255.
+    DATA: gt_itab        TYPE STANDARD TABLE OF char2048.
+
+
+    data: xml_result TYPE xstring .
+    data: xml_result_string type string.
+
+    " GET REFERENCE OF ls_work_user INTO gs_source_wa-value.
+    "  gs_source_wa-name = 'Resource'.
+    "  APPEND gs_source_wa TO gt_source_itab.
+    "      CALL TRANSFORMATION id
+    "      SOURCE THISONE = ls_work_user
+    "      RESULT XML gt_itab.
+    GET REFERENCE OF ls_work_user INTO gs_source_wa-value.
+    gs_source_wa-name = 'Resource'.
+    APPEND gs_source_wa TO gt_source_itab.
+*call transformation ZABAP "id "zworktest "Z_AQ_CHANGE_LOG_TRANSFORMATION
+*          source abaproot = t_abaptxt255_tab"s_dd02tv "tt_work_user
+*          result XML gt_itab[].
+    CALL TRANSFORMATION z_test3
+    options    XML_HEADER = 'NO'
+      SOURCE newdataset = tt_work_user[]
+      RESULT XML  xml_result  .
+    CALL TRANSFORMATION z_test3
+    options    XML_HEADER = 'NO'
+      SOURCE newdataset = tt_work_user[]
+      RESULT XML  xml_result_string  .
+*   cl_abap_browser=>show_xml( EXPORTING xml_xstring = xml_result ).
+*    cl_abap_browser=>show_xml( EXPORTING xml_string = xml_result_string ).
+    DATA: gt_itab_out        TYPE STANDARD TABLE OF char2048.
+
+
+    constants:  xmllen_res type i value 80.
+    types:  t_xmllin_res(xmllen_res) type c,
+                t_xmltab_res type standard table of t_xmllin_res.
+    data: xmltab_res type t_xmltab_res.
+    data: size type i, i type i, l type i.
+    data: s type string.
+    data: path type localfile VALUE 'C:\Users\pi063\Documents\fileout.xml'.
+    data: xmlstr_res type string.
+    xmlstr_res = xml_result_string.
+    s = path.
+    size = strlen( xml_result_string ).
+    i = 0.
+    while i < size.
+      l = size - i.
+      if l > xmllen_res.  l = xmllen_res.  endif.
+      append xmlstr_res+i(l) to xmltab_res.
+      add l to i.
+    endwhile.
+*    CALL FUNCTION 'GUI_DOWNLOAD'
+*      EXPORTING
+*        filename = s
+*        filetype = 'ASC'
+*        write_lf = ' '
+*      TABLES
+*        data_tab = xmltab_res
+*      EXCEPTIONS
+*        others   = 1.
+
+
+
+    IF SY-SUBRC <> 0.
+* Implement suitable error handling here
+    ENDIF.
+    "*********************************************************
+    "* Customising
+    "*********************************************************
+
+    "    DATA: go_strucdescr   TYPE REF TO cl_abap_structdescr.
+    "    DATA: gt_tab_fields   TYPE ddfields.
+    "    DATA: begin of gs_where,
+    "             condition(72).
+    "    DATA: end of gs_where.
+    "    DATA: gt_where like TABLE OF gs_where.
+    "    DATA: gv_offset type i.
+    "    DATA: gv_key_length type i.
+    "    DATA: gv_key_found(1).
+    "    DATA: lt_dba_sellist type TABLE OF  VIMSELLIST.
+    "    DATA: ls_dba_sellist TYPE VIMSELLIST.
+
+    "    FIELD-SYMBOLS: <gwa_tab_field> TYPE dfies.
+    "    loop at t_e070_open into s_e070 where as4user     = user
+    "                                AND   trfunction  = c_task_cust."Customsing only
+    "      clear gv_key_found. "This is used to indicate the view key was found in the customising tport
+    "      at first.
+    "        write: /, / 'Customising'.
+    "      endat.
+
+    "      write / s_e070-trkorr.
+    "      select  * from e071k into table t_e071k_custom
+    "  where trkorr = s_e070-trkorr.
+    "      loop at t_e071k_custom into s_e071k_custom.
+    "        write:/ s_e071k_custom-mastername,  s_e071k_custom-tabkey.
+    "        gv_key_length = strlen( s_e071k_custom-tabkey ).
+    "        TRY .
+    "*   Get the details of the DDIC table
+    "            go_strucdescr ?= cl_abap_elemdescr=>describe_by_name( s_e071k_custom-viewname ).
+    "          CATCH cx_sy_move_cast_error .
+    "            MESSAGE 'Error while casting' TYPE 'S'. RETURN.
+    "        ENDTRY.
+    "        gt_tab_fields = go_strucdescr->get_ddic_field_list( ).
+    "        clear gt_where[].
+    "        clear gv_offset.
+
+    "        LOOP AT gt_tab_fields ASSIGNING <gwa_tab_field> WHERE keyflag = 'X'.
+    "          WRITE: / <gwa_tab_field>-fieldname.
+    "          CONCATENATE '''' <gwa_tab_field>-fieldname '''' INTO ls_dba_sellist-viewfield.
+    "          ls_DBA_SELLIST-OPERATOR = 'EQ'.
+
+    "          "fill up where condition
+    "          if sy-tabix = 1.
+    "*           CONCATENATE <gwa_tab_field>-fieldname space '=' space '''' s_e071k_custom-tabkey(<gwa_tab_field>-leng) '''' into gs_where.
+    "            CONCATENATE '''' s_e071k_custom-tabkey(<gwa_tab_field>-leng) '''' into gs_where.
+    "            CONCATENATE <gwa_tab_field>-fieldname  ' = ' gs_where into gs_where RESPECTING BLANKS.
+
+    "          else.
+    "*            CONCATENATE <gwa_tab_field>-fieldname '='  '''' s_e071k_custom-tabkey+gv_offset(<gwa_tab_field>-leng) '''' into gs_where.
+    "*            CONCATENATE 'AND ' gs_where into gs_where RESPECTING BLANKS.
+    "            CONCATENATE '''' s_e071k_custom-tabkey+gv_offset(<gwa_tab_field>-leng) '''' into gs_where.
+    "            ls_dba_sellist-value = gs_where.
+    "            CONCATENATE <gwa_tab_field>-fieldname  ' = ' gs_where into gs_where RESPECTING BLANKS.
+    "            CONCATENATE 'AND ' gs_where into gs_where RESPECTING BLANKS.
+    "          ENDIF.
+    "          add <gwa_tab_field>-leng to gv_offset.
+    "          append gs_where to gt_where.
+    "          append ls_dba_sellist to lt_dba_sellist.
+    "        ENDLOOP.
+    "*Do dynamic select on the configuration key
+    "        data:     dref        TYPE REF TO data,
+    "                  itab_type   TYPE REF TO cl_abap_tabledescr,
+    "                  struct_type TYPE REF TO cl_abap_structdescr,
+    "                  elem_type   TYPE REF TO cl_abap_elemdescr,
+    "                  comp_tab    TYPE cl_abap_structdescr=>component_table.
+
+    "        FIELD-SYMBOLS : <lt_outtab> TYPE ANY TABLE.
+    "        struct_type ?= cl_abap_typedescr=>describe_by_name( s_e071k_custom-viewname ).
+    "        comp_tab = struct_type->get_components( ).
+    "        struct_type = cl_abap_structdescr=>create( comp_tab ).
+    "        itab_type   = cl_abap_tabledescr=>create( struct_type ).
+
+    "        CREATE DATA dref TYPE HANDLE itab_type.
+    "        ASSIGN dref->* TO <lt_outtab>.
+    "        DATA: BEGIN OF lt_view_data OCCURS 1,
+    "        c TYPE c LENGTH 8182, " max length
+    "        END OF lt_view_data .
+    "        DATA: ls_view_data like lt_view_data.
+    "        CALL FUNCTION 'VIEW_GET_DATA'
+    "          EXPORTING
+    "            VIEW_NAME              = s_e071k_custom-viewname
+    "          TABLES
+    "*           DBA_SELLIST            = lt_dba_sellist ""NOTE THIS IS NOT WORKING
+    "            DATA                   = lt_view_data
+    "          EXCEPTIONS
+    "            NO_VIEWMAINT_TOOL      = 1
+    "            NO_AUTHORITY           = 2
+    "            NO_AUTH_FOR_SEL        = 3
+    "            DATA_ACCESS_RESTRICTED = 4
+    "            NO_FUNCTIONGROUP       = 5
+    "            OTHERS                 = 6.
+    "        IF SY-SUBRC <> 0.
+    "* Implement suitable error handling here
+    "        ENDIF.
+
+    "        loop at lt_view_data INTO ls_view_data.
+    "          if ls_view_data-c(gv_key_length) = s_e071k_custom-tabkey.
+    "            gv_key_found = 'X'.
+    "            exit."Key found -
+    "          endif.
+    "        endloop.
+
+    "*        SELECT * from (s_e071k_custom-viewname)
+    "*        INTO TABLE <lt_outtab>
+    "*        WHERE    (gt_where).
+
+    "         if gv_key_found = 'X'.
+    "           exit. "The key to the customising transport is found
+    "         endif.
+
+    "      endloop.
+    "    endloop.
+  ENDLOOP. "The loop at t_users
+
+
+* to get the encoding we'll use standard XSLT ID
+* rather than ST - not required if you need Default UTF-8 from ST
+
+  DATA :go_ixml TYPE REF TO if_ixml,
+  go_stream_factory TYPE REF TO if_ixml_stream_factory,
+  go_encoding TYPE REF TO if_ixml_encoding,
+  go_resstream TYPE REF TO if_ixml_ostream.
+  DATA: gv_final_xml_xstring TYPE xstring.
+
+  CONSTANTS: gc_encoding TYPE string VALUE 'UTF-16'. "or UTF-8 etc.
+
+  go_ixml = cl_ixml=>create( ).
+  go_stream_factory = go_ixml->create_stream_factory( ).
+  go_encoding = go_ixml->create_encoding( character_set = gc_encoding byte_order = 0 ).
+  go_resstream = go_stream_factory->create_ostream_XSTRING( gv_final_xml_xstring ).
+
+  CALL METHOD go_resstream->set_encoding( go_encoding ).
+
+  CALL TRANSFORMATION ID
+  SOURCE XML xml_result
+  RESULT XML go_resstream.
+
+  cl_salv_data_services=>download_xml_to_file(
+  filename =  'C:\Users\Edlunda\fileout1.xml'
+  xcontent = gv_final_xml_xstring ).
+
+*  data: lv_inbound type string.
+*  CALL METHOD CL_SALV_DATA_SERVICES=>UPLOAD_XML_FROM_FILE
+*    EXPORTING
+*      FILENAME = 'C:\Users\pi063\Documents\fileout1.xml'
+*    RECEIVING
+*      VALUE    = lv_inbound.
+*  WRITE /.
+*  clear tt_work_user. refresh tt_work_user.
+*
+*  CALL TRANSFORMATION z_test3
+*
+*    SOURCE XML lv_inbound
+*    RESULT newdataset = tt_work_user[].
+*
+*
+*  write: /.
+
+
+ENDFUNCTION.
